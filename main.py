@@ -1,19 +1,17 @@
-import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import streamlit as st
 
 # -----------------------------------------------------------------------------
 # 1. 페이지 기본 설정
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="동네별 인구 피라미드",
-    page_icon="🏡",
-    layout="wide"
+    page_title="동네별 인구 피라미드", page_icon="🏡", layout="wide"
 )
 
 
 # -----------------------------------------------------------------------------
-# 2. 데이터 불러오기 함수 (캐싱을 적용하여 실행 속도 최적화)
+# 2. 데이터 불러오기 함수 (캐싱 적용)
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_data():
@@ -36,7 +34,7 @@ df_latest = df[df["연도"] == latest_year].copy()
 # -----------------------------------------------------------------------------
 st.title("🏡 우리 동네 인구 피라미드")
 st.markdown(
-    f"**{latest_year}년 기준** 전국 읍·면·동별 남녀 연령별 인구 구조를 따뜻한 시선으로 한눈에 확인해보세요."
+    f"**{latest_year}년 기준** 전국 읍·면·동별 남녀 연령별 인구 구조를 한눈에 확인해보세요."
 )
 st.markdown("---")
 
@@ -74,20 +72,19 @@ target_row = filtered_by_sigungu[filtered_by_sigungu["동"] == selected_dong]
 
 
 # -----------------------------------------------------------------------------
-# 5. Plotly 인구 피라미드 그래프 생성 및 시각화
+# 5. 데이터 가공 및 주요 지표 계산
 # -----------------------------------------------------------------------------
 if not target_row.empty:
     row = target_row.iloc[0]
 
-    # 0세부터 100세 이상까지의 연령 라벨 목록을 생성합니다. (0세가 리스트의 첫 번째)
+    # 0세부터 100세 이상까지의 연령 라벨 목록
     ages = [f"{i}세" for i in range(100)] + ["100세 이상"]
 
-    # 데이터 프레임 컬럼 이름에 맞게 남/여 컬럼 목록 생성
+    # 컬럼명 생성
     male_cols = [f"남_{age}" for age in ages]
     female_cols = [f"여_{age}" for age in ages]
 
-    # 인구 수 데이터 추출
-    # 남성은 왼쪽 배치를 위해 음수(-)값으로 변환하고, 여성은 양수(+)값으로 유지합니다.
+    # 인구 수 추출 (남성은 그래프용으로 음수 변환)
     male_pop = [
         -int(row[col]) if col in row and pd.notna(row[col]) else 0
         for col in male_cols
@@ -97,7 +94,69 @@ if not target_row.empty:
         for col in female_cols
     ]
 
-    # Plotly 시각화 객체 생성
+    # 지표 계산용 순수 양수 인구 수 배열
+    male_pop_abs = [abs(x) for x in male_pop]
+    female_pop_abs = female_pop
+
+    # 연령별 전체 인구 (남 + 여)
+    pop_by_age = [m + f for m, f in zip(male_pop_abs, female_pop_abs)]
+
+    # 1) 총인구 계산
+    total_pop = sum(pop_by_age)
+
+    if total_pop > 0:
+        # 나이 숫자 배열 (100세 이상은 100으로 간주하여 계산)
+        age_nums = list(range(100)) + [100]
+
+        # 2) 평균연령 계산: (나이 * 인구수)의 총합 / 총인구
+        weighted_age_sum = sum(
+            age * pop for age, pop in zip(age_nums, pop_by_age)
+        )
+        avg_age = weighted_age_sum / total_pop
+
+        # 3) 고령화율 계산: 65세 이상 인구 비율 (%)
+        elderly_pop = sum(pop_by_age[65:])  # 65세부터 끝까지 합산
+        aging_rate = (elderly_pop / total_pop) * 100
+
+        # 유소년 인구 비율 (0~14세)
+        child_pop = sum(pop_by_age[:15])  # 0~14세 합산
+        child_rate = (child_pop / total_pop) * 100
+    else:
+        avg_age = 0.0
+        aging_rate = 0.0
+        child_rate = 0.0
+
+    # -----------------------------------------------------------------------------
+    # 6. 상단 주요 지표 카드 (3개 나란히 배치)
+    # -----------------------------------------------------------------------------
+    m_col1, m_col2, m_col3 = st.columns(3)
+
+    with m_col1:
+        st.metric(label="👥 총인구", value=f"{total_pop:,} 명")
+
+    with m_col2:
+        st.metric(label="🎂 평균연령", value=f"{avg_age:.1f} 세")
+
+    with m_col3:
+        # 고령화율이 20% 이상인 경우 경고 표시(⚠️) 및 안내문 추가
+        if aging_rate >= 20.0:
+            st.metric(
+                label="👵 고령화율 (65세 이상) ⚠️",
+                value=f"{aging_rate:.1f} %",
+                delta="⚠️ 초고령사회 (20% 이상)",
+                delta_color="inverse",
+            )
+        else:
+            st.metric(
+                label="👵 고령화율 (65세 이상)",
+                value=f"{aging_rate:.1f} %",
+            )
+
+    st.markdown("---")
+
+    # -----------------------------------------------------------------------------
+    # 7. Plotly 인구 피라미드 그래프 생성 및 시각화
+    # -----------------------------------------------------------------------------
     fig = go.Figure()
 
     # 남성 막대 그래프 (왼쪽 방향)
@@ -107,68 +166,5 @@ if not target_row.empty:
             x=male_pop,
             name="남성",
             orientation="h",
-            marker=dict(color="#6BAED6"),  # 포근한 소프트 블루
-            text=[f"{abs(val):,}명" for val in male_pop],
-            hoverinfo="text",
-            hovertemplate="<b>%{y} 남성</b>: %{text}<extra></extra>",
-        )
-    )
-
-    # 여성 막대 그래프 (오른쪽 방향)
-    fig.add_trace(
-        go.Bar(
-            y=ages,
-            x=female_pop,
-            name="여성",
-            orientation="h",
-            marker=dict(color="#FB6A4A"),  # 따뜻한 피치 코랄
-            text=[f"{val:,}명" for val in female_pop],
-            hoverinfo="text",
-            hovertemplate="<b>%{y} 여성</b>: %{text}<extra></extra>",
-        )
-    )
-
-    # X축 눈금을 양수로 깔끔하게 정돈하기 위한 자동 범위 산출
-    all_abs_vals = [abs(x) for x in male_pop] + female_pop
-    max_val = max(all_abs_vals) if all_abs_vals else 100
-
-    step = max(1, int(max_val / 4))
-    tick_vals = list(range(-step * 4, step * 5, step))
-    tick_texts = [f"{abs(v):,}" for v in tick_vals]
-
-    # 그래프 레이아웃 세부 설정
-    fig.update_layout(
-        title={
-            "text": f"<b>{selected_sido} {selected_sigungu} {selected_dong}</b> 인구 피라미드 ({latest_year}년)",
-            "x": 0.5,
-            "xanchor": "center",
-            "font": {"size": 20},
-        },
-        barmode="overlay",  # 남/여 막대를 중심축 기준으로 양옆 배치
-        xaxis=dict(
-            title="인구 수 (명)",
-            tickmode="array",
-            tickvals=tick_vals,
-            ticktext=tick_texts,
-            zeroline=True,
-            zerolinecolor="#999999",
-            zerolinewidth=1.5,
-        ),
-        yaxis=dict(
-            title="나이",
-            # 핵심 설정: categoryorder='array'와 categoryarray를 사용하여
-            # ages 배열 순서대로 (맨 아래: '0세' ~ 맨 위: '100세 이상') 축에 직접 고정합니다.
-            categoryorder="array",
-            categoryarray=ages,
-        ),
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
-        ),
-        height=950,  # 0~100세 눈금이 답답하지 않게 세로 길이를 넉넉히 설정
-        margin=dict(l=60, r=60, t=100, b=60),
-        plot_bgcolor="#FAF9F6",  # 따뜻한 웜화이트 배경
-        paper_bgcolor="#FFFFFF",
-    )
-
-    # 스트림릿 화면에 그래프 표시
-    st.plotly_chart(fig, use_container_width=True)
+            marker=dict(color="#6BAED6"),  # 소프트 블루
+            text=[f"{abs(val):,}명" for val in male
